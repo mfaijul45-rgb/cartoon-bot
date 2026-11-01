@@ -1,5 +1,7 @@
-python-telegram-bot==20.3
+python-telegram-bot
 requests
-moviepy==1.0.3
 edge-tts
-pydub
+moviepy==1.0.3
+imageio==2.31.2
+imageio-ffmpeg
+Pillow
