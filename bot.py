@@ -12,15 +12,17 @@ from PIL import Image, ImageDraw
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# Render Port Binding Dummy Server
 class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"Bot is alive!")
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
 
 def run_server():
-    port = int(os.environ.get("PORT", 8080))
+    port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(("0.0.0.0", port), DummyHandler)
     server.serve_forever()
 
@@ -43,17 +45,15 @@ async def generate_cartoon_video(update: Update, context: ContextTypes.DEFAULT_T
         for idx, scene_text in enumerate(raw_scenes):
             await status_msg.edit_text(f"सीन {idx+1}/{total} तैयार हो रहा है...")
 
-            # 1. ऑडियो तैयार करना
             audio_path = f"voice_{idx}.mp3"
             temp_files.append(audio_path)
             tts = edge_tts.Communicate(scene_text, "hi-IN-MadhurNeural")
             await tts.save(audio_path)
 
-            # 2. सुरक्षित इमेज तैयार करना
             img_path = f"scene_{idx}.jpg"
             temp_files.append(img_path)
-            encoded_prompt = urllib.parse.quote(f"2D cartoon flat illustration, colorful animation, indian village, {scene_text[:60]}")
-            img_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1280&height=720&nologo=true"
+            encoded_prompt = urllib.parse.quote(f"2D cartoon illustration, indian village story, {scene_text[:50]}")
+            img_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=854&height=480&nologo=true"
 
             success = False
             try:
@@ -62,31 +62,35 @@ async def generate_cartoon_video(update: Update, context: ContextTypes.DEFAULT_T
                     with open(img_path, "wb") as f:
                         f.write(resp.content)
                     with Image.open(img_path) as im:
-                        im.convert("RGB").save(img_path, "JPEG")
+                        im.convert("RGB").resize((854, 480)).save(img_path, "JPEG", quality=80)
                     success = True
             except Exception:
                 success = False
 
-            # अगर इमेज डाउनलोड में कोई दिक्कत आए, तो खाली बैकड्रॉप बनाना
             if not success:
-                fallback_img = Image.new("RGB", (1280, 720), color=(50, 120, 200))
+                fallback_img = Image.new("RGB", (854, 480), color=(60, 130, 210))
                 draw = ImageDraw.Draw(fallback_img)
                 fallback_img.save(img_path, "JPEG")
 
-            # 3. क्लिप बनाना
             audio_clip = AudioFileClip(audio_path)
             clip = ImageClip(img_path).set_duration(audio_clip.duration).set_audio(audio_clip)
             video_clips.append(clip)
 
-        # 4. वीडियो को जोड़ना
         await status_msg.edit_text("सारे सीन्स जोड़े जा रहे हैं, वीडियो बन रहा है...")
         final_video = concatenate_videoclips(video_clips, method="compose")
         output_file = "full_cartoon_story.mp4"
         temp_files.append(output_file)
 
-        final_video.write_videofile(output_file, fps=24, codec="libx264", audio_codec="aac")
+        # कम मेमोरी (RAM) खपत के साथ तेज़ रेंडरिंग
+        final_video.write_videofile(
+            output_file,
+            fps=12,
+            codec="libx264",
+            audio_codec="aac",
+            preset="ultrafast",
+            threads=1
+        )
 
-        # 5. वीडियो भेजना
         with open(output_file, "rb") as v:
             await update.message.reply_video(video=v, caption="यह रहा आपका कार्टून वीडियो!")
 
