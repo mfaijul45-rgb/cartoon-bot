@@ -8,7 +8,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 import edge_tts
 from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips
-from PIL import Image, ImageDraw
+from PIL import Image
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
@@ -42,6 +42,10 @@ async def generate_cartoon_video(update: Update, context: ContextTypes.DEFAULT_T
 
     try:
         total = len(raw_scenes)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+        }
+
         for idx, scene_text in enumerate(raw_scenes):
             await status_msg.edit_text(f"सीन {idx+1}/{total} तैयार हो रहा है...")
 
@@ -52,24 +56,26 @@ async def generate_cartoon_video(update: Update, context: ContextTypes.DEFAULT_T
 
             img_path = f"scene_{idx}.jpg"
             temp_files.append(img_path)
-            encoded_prompt = urllib.parse.quote(f"2D cartoon illustration, indian village story, {scene_text[:50]}")
-            img_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=854&height=480&nologo=true"
+            encoded_prompt = urllib.parse.quote(f"2d vibrant cartoon animation illustration, indian village scene, {scene_text[:50]}")
+            img_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=854&height=480&nologo=true&seed={idx+100}"
 
+            # इमेज डाउनलोड और सत्यापन
             success = False
-            try:
-                resp = requests.get(img_url, timeout=25)
-                if resp.status_code == 200 and len(resp.content) > 5000:
-                    with open(img_path, "wb") as f:
-                        f.write(resp.content)
-                    with Image.open(img_path) as im:
-                        im.convert("RGB").resize((854, 480)).save(img_path, "JPEG", quality=80)
-                    success = True
-            except Exception:
-                success = False
+            for _ in range(3):
+                try:
+                    resp = requests.get(img_url, headers=headers, timeout=30)
+                    if resp.status_code == 200 and len(resp.content) > 5000:
+                        with open(img_path, "wb") as f:
+                            f.write(resp.content)
+                        with Image.open(img_path) as im:
+                            im.convert("RGB").resize((854, 480)).save(img_path, "JPEG", quality=85)
+                        success = True
+                        break
+                except Exception:
+                    await asyncio.sleep(2)
 
             if not success:
-                fallback_img = Image.new("RGB", (854, 480), color=(60, 130, 210))
-                draw = ImageDraw.Draw(fallback_img)
+                fallback_img = Image.new("RGB", (854, 480), color=(40, 40, 60))
                 fallback_img.save(img_path, "JPEG")
 
             audio_clip = AudioFileClip(audio_path)
@@ -81,7 +87,6 @@ async def generate_cartoon_video(update: Update, context: ContextTypes.DEFAULT_T
         output_file = "full_cartoon_story.mp4"
         temp_files.append(output_file)
 
-        # कम मेमोरी (RAM) खपत के साथ तेज़ रेंडरिंग
         final_video.write_videofile(
             output_file,
             fps=12,
