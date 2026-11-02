@@ -1,23 +1,20 @@
 import os
 import asyncio
 import threading
-import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 import edge_tts
 from pydub import AudioSegment
+from pydub.generators import Sine
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
-BGM_URL = "https://raw.githubusercontent.com/md-workspace/audio-assets/main/horror_drone_safe.mp3"
-BGM_FILE = "horror_bgm.mp3"
 
 class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot is Running!")
+        self.wfile.write(b"Horror Audio Bot Running!")
     def do_HEAD(self):
         self.send_response(200)
         self.end_headers()
@@ -27,32 +24,29 @@ def run_server():
     server = HTTPServer(("0.0.0.0", port), DummyHandler)
     server.serve_forever()
 
-def ensure_bgm():
-    if not os.path.exists(BGM_FILE) or os.path.getsize(BGM_FILE) < 5000:
-        req = urllib.request.Request(
-            BGM_URL, 
-            headers={'User-Agent': 'Mozilla/5.0'}
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp, open(BGM_FILE, 'wb') as out:
-                out.write(resp.read())
-        except Exception:
-            pass
+def generate_horror_track(duration_ms):
+    # गहरा डरावना बेस टोन (Dark Sub-Bass)
+    low_drone = Sine(45).to_audio_segment(duration=duration_ms).low_pass_filter(90) - 8
+    # सस्पेंस भरी गूँज (Eerie Resonance)
+    mid_eerie = Sine(110).to_audio_segment(duration=duration_ms).low_pass_filter(180) - 16
+    # हवा जैसी खौफ़नाक सरसराहट (Dark Hum)
+    high_wind = Sine(220).to_audio_segment(duration=duration_ms).low_pass_filter(280) - 22
+    
+    horror_bgm = low_drone.overlay(mid_eerie).overlay(high_wind)
+    return horror_bgm
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("नमस्ते! कहानी भेजिए, मैं एकदम साफ़ आवाज़ और बैकग्राउंड हॉरर म्यूज़िक के साथ ऑडियो तैयार कर दूँगा।")
+    await update.message.reply_text("नमस्ते! अपनी कहानी भेजिए, मैं सस्पेंस भरी धीमी आवाज़ और हॉरर बैकग्राउंड के साथ पूरा ऑडियो तैयार कर दूँगा।")
 
 async def generate_horror_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    status = await update.message.reply_text("डायलॉग्स और साफ़ आवाज़ें तैयार हो रही हैं...")
+    status = await update.message.reply_text("डायलॉग्स और सस्पेंस भरी आवाज़ें तैयार हो रही हैं...")
 
     lines = [line.strip() for line in text.split("\n") if line.strip()]
     temp_files = []
     combined_dialogs = AudioSegment.empty()
 
     try:
-        ensure_bgm()
-
         for idx, line in enumerate(lines):
             if ":" in line:
                 char_name, dialog = line.split(":", 1)
@@ -64,45 +58,55 @@ async def generate_horror_audio(update: Update, context: ContextTypes.DEFAULT_TY
             char_name = char_name.strip()
             dialog = dialog.strip()
 
-            # 100% ओरिजिनल और अनफ़िल्टर्ड आवाज़ें (कोई रोबोटिक या भारी पिच नहीं)
-            if any(k in char_name for k in ["भूत", "चुड़ैल", "राक्षस", "आत्मा", "लड़की", "औरत", "महिला", "माँ"]):
+            # आवाज़ का चुनाव
+            if any(k in char_name for k in ["भूत", "चुड़ैल", "राक्षस", "आत्मा"]):
                 voice = "hi-IN-SwaraNeural"
-            else:
-                # कथावाचक / नैरेटर और पुरुष किरदारों के लिए साफ़ और नेचुरल हिंदी
+                rate = "-18%"   # डरावनी धीमी गति
+                pitch = "-4Hz"
+            elif any(k in char_name for k in ["लड़की", "औरत", "महिला", "माँ"]):
+                voice = "hi-IN-SwaraNeural"
+                rate = "-12%"
+                pitch = "+0Hz"
+            elif any(k in char_name for k in ["लड़का", "रोहन", "आदमी", "रामू"]):
                 voice = "hi-IN-MadhurNeural"
+                rate = "-12%"
+                pitch = "+0Hz"
+            else:
+                # नैरेटर: एकदम धीमी, गंभीर और सस्पेंस वाली गति
+                voice = "hi-IN-MadhurNeural"
+                rate = "-15%"
+                pitch = "-2Hz"
 
             temp_path = f"part_{idx}.mp3"
             temp_files.append(temp_path)
 
-            # पिच और रेट को बिल्कुल न्यूट्रल रखा है ताकि इंसान जैसी साफ़ आवाज़ आए
-            tts = edge_tts.Communicate(dialog, voice=voice, pitch="+0Hz", rate="+0%")
+            tts = edge_tts.Communicate(dialog, voice=voice, pitch=pitch, rate=rate)
             await tts.save(temp_path)
 
             segment = AudioSegment.from_file(temp_path)
-            combined_dialogs += segment + AudioSegment.silent(duration=500)
+            # हर डायलॉग के बाद 1.2 सेकंड का सन्नाटा ताकि सस्पेंस बने
+            combined_dialogs += segment + AudioSegment.silent(duration=1200)
 
-        await status.edit_text("म्यूज़िक मिक्स किया जा रहा है...")
+        await status.edit_text("डरावना बैकग्राउंड माहौल जोड़ा जा रहा है...")
 
         dialog_duration = len(combined_dialogs)
+        
+        # 100% पक्का हॉरर ट्रैक जनरेट करना
+        horror_bgm = generate_horror_track(dialog_duration)
 
-        # बैकग्राउंड म्यूज़िक को सही वॉल्यूम पर मिक्स करना
-        if os.path.exists(BGM_FILE) and os.path.getsize(BGM_FILE) > 5000:
-            bgm = AudioSegment.from_file(BGM_FILE)
-            while len(bgm) < dialog_duration:
-                bgm += bgm
-            bgm = bgm[:dialog_duration]
-            # म्यूज़िक को -22 dB पर रखा है ताकि आवाज़ बिल्कुल न दबे और साफ़ रहे
-            bgm = bgm - 22
-            final_audio = combined_dialogs.overlay(bgm)
-        else:
-            final_audio = combined_dialogs
-
-        output_file = "clear_horror_story.mp3"
+        # दोनों को आपस में मिक्स करना
+        final_audio = combined_dialogs.overlay(horror_bgm)
+        
+        output_file = "final_suspense_horror.mp3"
         temp_files.append(output_file)
         final_audio.export(output_file, format="mp3", bitrate="192k")
 
         with open(output_file, "rb") as audio:
-            await update.message.reply_audio(audio=audio, title="Crystal Clear Horror Audio", caption="यह रहा आपका एकदम साफ़ आवाज़ वाला ऑडियो!")
+            await update.message.reply_audio(
+                audio=audio, 
+                title="Slow Suspense Horror Story", 
+                caption="धीमी सस्पेंस भरी आवाज़ और हॉरर बैकग्राउंड वाला ऑडियो तैयार है!"
+            )
 
         await status.delete()
 
