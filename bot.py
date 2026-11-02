@@ -1,20 +1,25 @@
 import os
 import asyncio
 import threading
+import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 import edge_tts
 from pydub import AudioSegment
-from pydub.generators import Sine
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+# 100% रॉयल्टी-फ़्री असली हॉरर बैकग्राउंड म्यूज़िक
+HORROR_BGM_URL = "https://raw.githubusercontent.com/md-workspace/audio-assets/main/horror_drone_safe.mp3"
+FALLBACK_BGM_URL = "https://ia800903.us.archive.org/24/items/horror-ambience-loop/horror_loop_ambience.mp3"
+BGM_FILE = "horror_bgm.mp3"
 
 class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Horror Audio Bot is Running!")
+        self.wfile.write(b"Horror Bot Running Smoothly!")
     def do_HEAD(self):
         self.send_response(200)
         self.end_headers()
@@ -24,8 +29,20 @@ def run_server():
     server = HTTPServer(("0.0.0.0", port), DummyHandler)
     server.serve_forever()
 
+def ensure_bgm():
+    if not os.path.exists(BGM_FILE) or os.path.getsize(BGM_FILE) < 10000:
+        req = urllib.request.Request(
+            FALLBACK_BGM_URL, 
+            headers={'User-Agent': 'Mozilla/5.0'}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp, open(BGM_FILE, 'wb') as out:
+                out.write(resp.read())
+        except Exception:
+            pass
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("नमस्ते! अपनी कहानी भेजिए, मैं अलग-अलग आवाज़ों और डरावने बैकग्राउंड म्यूज़िक के साथ पूरा ऑडियो तैयार कर दूँगा।")
+    await update.message.reply_text("नमस्ते! हॉरर कहानी भेजिए, मैं सस्पेंस भरी आवाज़ और असली डरावने म्यूज़िक के साथ पूरा ऑडियो तैयार कर दूँगा।")
 
 async def generate_horror_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -33,9 +50,11 @@ async def generate_horror_audio(update: Update, context: ContextTypes.DEFAULT_TY
 
     lines = [line.strip() for line in text.split("\n") if line.strip()]
     temp_files = []
-    combined_audio = AudioSegment.empty()
+    combined_dialogs = AudioSegment.empty()
 
     try:
+        ensure_bgm()
+
         for idx, line in enumerate(lines):
             if ":" in line:
                 char_name, dialog = line.split(":", 1)
@@ -47,24 +66,24 @@ async def generate_horror_audio(update: Update, context: ContextTypes.DEFAULT_TY
             char_name = char_name.strip()
             dialog = dialog.strip()
 
-            # कैरेक्टर के हिसाब से वॉयस और पिच
+            # किरदारों के हिसाब से आवाज़ और सस्पेंस
             if any(k in char_name for k in ["भूत", "चुड़ैल", "राक्षस", "आत्मा"]):
                 voice = "hi-IN-SwaraNeural"
-                pitch = "-30Hz"
-                rate = "-15%"
-            elif any(k in char_name for k in ["लड़का", "रामू", "आदमी", "रोहन"]):
+                pitch = "-12Hz"
+                rate = "-8%"
+            elif any(k in char_name for k in ["लड़का", "रोहन", "आदमी", "रामू"]):
                 voice = "hi-IN-MadhurNeural"
-                pitch = "+5Hz"
+                pitch = "+0Hz"
                 rate = "+0%"
             elif any(k in char_name for k in ["लड़की", "औरत", "महिला", "माँ"]):
                 voice = "hi-IN-SwaraNeural"
-                pitch = "+5Hz"
+                pitch = "+0Hz"
                 rate = "+0%"
             else:
-                # नैरेटर
+                # कथावाचक (नैरेटर): गहरा बेस और धीमी सस्पेंस वाली गति (बिना रोबोटिक बने)
                 voice = "hi-IN-MadhurNeural"
-                pitch = "-15Hz"
-                rate = "-10%"
+                pitch = "-6Hz"
+                rate = "-8%"
 
             temp_path = f"part_{idx}.mp3"
             temp_files.append(temp_path)
@@ -73,21 +92,30 @@ async def generate_horror_audio(update: Update, context: ContextTypes.DEFAULT_TY
             await tts.save(temp_path)
 
             segment = AudioSegment.from_file(temp_path)
-            combined_audio += segment + AudioSegment.silent(duration=500)
+            # डायलॉग्स के बीच में 600ms का ठहराव ताकि हॉरर म्यूज़िक का डर महसूस हो
+            combined_dialogs += segment + AudioSegment.silent(duration=600)
 
-        await status.edit_text("डरावना बैकग्राउंड म्यूज़िक जोड़ा जा रहा है...")
+        await status.edit_text("डरावना बैकग्राउंड म्यूज़िक मिक्स किया जा रहा है...")
 
-        duration_ms = len(combined_audio)
-        bg_drone = Sine(55).to_audio_segment(duration=duration_ms).low_pass_filter(120)
-        bg_drone = bg_drone - 24
+        dialog_duration = len(combined_dialogs)
 
-        final_audio = combined_audio.overlay(bg_drone)
-        output_file = "horror_story.mp3"
+        if os.path.exists(BGM_FILE) and os.path.getsize(BGM_FILE) > 5000:
+            bgm = AudioSegment.from_file(BGM_FILE)
+            while len(bgm) < dialog_duration:
+                bgm += bgm
+            bgm = bgm[:dialog_duration]
+            # बैकग्राउंड म्यूज़िक को सही बैलेंस पर रखना
+            bgm = bgm - 18
+            final_audio = combined_dialogs.overlay(bgm)
+        else:
+            final_audio = combined_dialogs
+
+        output_file = "final_suspense_horror.mp3"
         temp_files.append(output_file)
         final_audio.export(output_file, format="mp3")
 
         with open(output_file, "rb") as audio:
-            await update.message.reply_audio(audio=audio, title="Horror Story Audio", caption="यह रहा आपका हॉरर ऑडियो!")
+            await update.message.reply_audio(audio=audio, title="Suspense Horror Audio", caption="यह रहा आपका सस्पेंस आवाज़ और हॉरर म्यूज़िक वाला ऑडियो!")
 
         await status.delete()
 
