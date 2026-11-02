@@ -1,14 +1,12 @@
 import os
 import asyncio
-import requests
-import urllib.parse
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 import edge_tts
-from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips
-from PIL import Image
+from pydub import AudioSegment
+from pydub.generators import Sine
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
@@ -16,7 +14,7 @@ class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot is alive!")
+        self.wfile.write(b"Horror Audio Bot is Running!")
     def do_HEAD(self):
         self.send_response(200)
         self.end_headers()
@@ -27,89 +25,76 @@ def run_server():
     server.serve_forever()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("नमस्ते! अपनी कहानी भेजिए, मैं उसका कार्टून वीडियो तैयार कर दूँगा।")
+    await update.message.reply_text("नमस्ते! अपनी कहानी भेजिए, मैं अलग-अलग आवाज़ों और डरावने बैकग्राउंड म्यूज़िक के साथ पूरा ऑडियो तैयार कर दूँगा।")
 
-async def generate_cartoon_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_story = update.message.text
-    status_msg = await update.message.reply_text("कहानी मिल गई है! वीडियो पर काम शुरू हो रहा है...")
+async def generate_horror_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    status = await update.message.reply_text("डायलॉग्स और डरावनी आवाज़ें तैयार हो रही हैं...")
 
-    raw_scenes = [s.strip() for s in user_story.replace("\n", "।").split("।") if len(s.strip()) > 5]
-    if not raw_scenes:
-        raw_scenes = [user_story]
-
-    video_clips = []
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
     temp_files = []
+    combined_audio = AudioSegment.empty()
 
     try:
-        total = len(raw_scenes)
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
-        }
+        for idx, line in enumerate(lines):
+            if ":" in line:
+                char_name, dialog = line.split(":", 1)
+            elif "ः" in line:
+                char_name, dialog = line.split("ः", 1)
+            else:
+                char_name, dialog = "नैरेटर", line
 
-        for idx, scene_text in enumerate(raw_scenes):
-            await status_msg.edit_text(f"सीन {idx+1}/{total} तैयार हो रहा है...")
+            char_name = char_name.strip()
+            dialog = dialog.strip()
 
-            audio_path = f"voice_{idx}.mp3"
-            temp_files.append(audio_path)
-            tts = edge_tts.Communicate(scene_text, "hi-IN-MadhurNeural")
-            await tts.save(audio_path)
+            # कैरेक्टर के हिसाब से वॉयस और पिच
+            if any(k in char_name for k in ["भूत", "चुड़ैल", "राक्षस", "आत्मा"]):
+                voice = "hi-IN-SwaraNeural"
+                pitch = "-30Hz"
+                rate = "-15%"
+            elif any(k in char_name for k in ["लड़का", "रामू", "आदमी", "रोहन"]):
+                voice = "hi-IN-MadhurNeural"
+                pitch = "+5Hz"
+                rate = "+0%"
+            elif any(k in char_name for k in ["लड़की", "औरत", "महिला", "माँ"]):
+                voice = "hi-IN-SwaraNeural"
+                pitch = "+5Hz"
+                rate = "+0%"
+            else:
+                # नैरेटर
+                voice = "hi-IN-MadhurNeural"
+                pitch = "-15Hz"
+                rate = "-10%"
 
-            img_path = f"scene_{idx}.jpg"
-            temp_files.append(img_path)
-            encoded_prompt = urllib.parse.quote(f"2d vibrant cartoon animation illustration, indian village scene, {scene_text[:50]}")
-            img_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=854&height=480&nologo=true&seed={idx+100}"
+            temp_path = f"part_{idx}.mp3"
+            temp_files.append(temp_path)
 
-            # इमेज डाउनलोड और सत्यापन
-            success = False
-            for _ in range(3):
-                try:
-                    resp = requests.get(img_url, headers=headers, timeout=30)
-                    if resp.status_code == 200 and len(resp.content) > 5000:
-                        with open(img_path, "wb") as f:
-                            f.write(resp.content)
-                        with Image.open(img_path) as im:
-                            im.convert("RGB").resize((854, 480)).save(img_path, "JPEG", quality=85)
-                        success = True
-                        break
-                except Exception:
-                    await asyncio.sleep(2)
+            tts = edge_tts.Communicate(dialog, voice=voice, pitch=pitch, rate=rate)
+            await tts.save(temp_path)
 
-            if not success:
-                fallback_img = Image.new("RGB", (854, 480), color=(40, 40, 60))
-                fallback_img.save(img_path, "JPEG")
+            segment = AudioSegment.from_file(temp_path)
+            combined_audio += segment + AudioSegment.silent(duration=500)
 
-            audio_clip = AudioFileClip(audio_path)
-            clip = ImageClip(img_path).set_duration(audio_clip.duration).set_audio(audio_clip)
-            video_clips.append(clip)
+        await status.edit_text("डरावना बैकग्राउंड म्यूज़िक जोड़ा जा रहा है...")
 
-        await status_msg.edit_text("सारे सीन्स जोड़े जा रहे हैं, वीडियो बन रहा है...")
-        final_video = concatenate_videoclips(video_clips, method="compose")
-        output_file = "full_cartoon_story.mp4"
+        duration_ms = len(combined_audio)
+        bg_drone = Sine(55).to_audio_segment(duration=duration_ms).low_pass_filter(120)
+        bg_drone = bg_drone - 24
+
+        final_audio = combined_audio.overlay(bg_drone)
+        output_file = "horror_story.mp3"
         temp_files.append(output_file)
+        final_audio.export(output_file, format="mp3")
 
-        final_video.write_videofile(
-            output_file,
-            fps=12,
-            codec="libx264",
-            audio_codec="aac",
-            preset="ultrafast",
-            threads=1
-        )
+        with open(output_file, "rb") as audio:
+            await update.message.reply_audio(audio=audio, title="Horror Story Audio", caption="यह रहा आपका हॉरर ऑडियो!")
 
-        with open(output_file, "rb") as v:
-            await update.message.reply_video(video=v, caption="यह रहा आपका कार्टून वीडियो!")
-
-        await status_msg.delete()
+        await status.delete()
 
     except Exception as e:
-        await status_msg.edit_text(f"त्रुटि: {e}")
+        await status.edit_text(f"त्रुटि: {e}")
 
     finally:
-        for clip in video_clips:
-            try:
-                clip.close()
-            except Exception:
-                pass
         for f in temp_files:
             if os.path.exists(f):
                 try:
@@ -123,6 +108,6 @@ if __name__ == "__main__":
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), generate_cartoon_video))
-    print("बॉट शुरू हो गया है...")
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), generate_horror_audio))
+    print("हॉरर ऑडियो बॉट चालू है...")
     app.run_polling()
