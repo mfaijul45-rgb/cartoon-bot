@@ -3,130 +3,97 @@ import asyncio
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
-import edge_tts
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from pydub import AudioSegment
 from pydub.generators import Sine
+import requests
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+# यहाँ आपकी ElevenLabs की कॉपी की हुई Key पेस्ट कर दी गई है:
+ELEVENLABS_API_KEY = "sk_bede3c8f043c1cac00645ed4e2a6746366ff288f3bd20174"
 
+# Render/Webserver के लिए डमी हैंडलर
 class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Horror Audio Bot Running!")
+        self.wfile.write(b"Horror Audio Bot is Running!")
+
     def do_HEAD(self):
         self.send_response(200)
         self.end_headers()
 
 def run_server():
-    port = int(os.environ.get("PORT", 10000))
+    port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(("0.0.0.0", port), DummyHandler)
     server.serve_forever()
 
-def generate_horror_track(duration_ms):
-    # गहरा डरावना बेस टोन (Dark Sub-Bass)
-    low_drone = Sine(45).to_audio_segment(duration=duration_ms).low_pass_filter(90) - 8
-    # सस्पेंस भरी गूँज (Eerie Resonance)
-    mid_eerie = Sine(110).to_audio_segment(duration=duration_ms).low_pass_filter(180) - 16
-    # हवा जैसी खौफ़नाक सरसराहट (Dark Hum)
-    high_wind = Sine(220).to_audio_segment(duration=duration_ms).low_pass_filter(280) - 22
-    
-    horror_bgm = low_drone.overlay(mid_eerie).overlay(high_wind)
-    return horror_bgm
+def generate_horror_bgm(duration_ms):
+    sine_wave = Sine(70).to_audio_segment(duration=duration_ms)
+    bgm = sine_wave - 18
+    return bgm
+
+async def generate_voice_elevenlabs(text, output_file):
+    url = "https://api.elevenlabs.io/v1/text-to-speech/pNInz6obpgDQGcFmaJgB"
+    headers = {
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+        "xi-api-key": ELEVENLABS_API_KEY
+    }
+    data = {
+        "text": text,
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {
+            "stability": 0.45,
+            "similarity_boost": 0.85
+        }
+    }
+    response = requests.post(url, json=data, headers=headers)
+    if response.status_code == 200:
+        with open(output_file, "wb") as f:
+            f.write(response.content)
+        return True
+    return False
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("नमस्ते! अपनी कहानी भेजिए, मैं सस्पेंस भरी धीमी आवाज़ और हॉरर बैकग्राउंड के साथ पूरा ऑडियो तैयार कर दूँगा।")
+    await update.message.reply_text("भूतिया आवाज़ बॉट में स्वागत है! अपनी हॉरर कहानी भेजिए, मैं डरावनी आवाज़ और BGM के साथ ऑडियो बना दूँगा।")
 
-async def generate_horror_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    status = await update.message.reply_text("डायलॉग्स और सस्पेंस भरी आवाज़ें तैयार हो रही हैं...")
+async def handle_story(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    story_text = update.message.text
+    msg = await update.message.reply_text("डरावनी आवाज़ बनाई जा रही है... कृपया इंतज़ार करें।")
 
-    lines = [line.strip() for line in text.split("\n") if line.strip()]
-    temp_files = []
-    combined_dialogs = AudioSegment.empty()
+    temp_voice = "temp_voice.mp3"
+    final_output = "horror_story.mp3"
 
     try:
-        for idx, line in enumerate(lines):
-            if ":" in line:
-                char_name, dialog = line.split(":", 1)
-            elif "ः" in line:
-                char_name, dialog = line.split("ः", 1)
-            else:
-                char_name, dialog = "नैरेटर", line
+        success = await generate_voice_elevenlabs(story_text, temp_voice)
+        if not success:
+            await msg.edit_text("वॉइस बनाने में समस्या आई, कृपया बाद में प्रयास करें।")
+            return
 
-            char_name = char_name.strip()
-            dialog = dialog.strip()
+        voice_audio = AudioSegment.from_file(temp_voice)
+        duration = len(voice_audio)
+        bgm_audio = generate_horror_bgm(duration)
 
-            # आवाज़ का चुनाव
-            if any(k in char_name for k in ["भूत", "चुड़ैल", "राक्षस", "आत्मा"]):
-                voice = "hi-IN-SwaraNeural"
-                rate = "-18%"   # डरावनी धीमी गति
-                pitch = "-4Hz"
-            elif any(k in char_name for k in ["लड़की", "औरत", "महिला", "माँ"]):
-                voice = "hi-IN-SwaraNeural"
-                rate = "-12%"
-                pitch = "+0Hz"
-            elif any(k in char_name for k in ["लड़का", "रोहन", "आदमी", "रामू"]):
-                voice = "hi-IN-MadhurNeural"
-                rate = "-12%"
-                pitch = "+0Hz"
-            else:
-                # नैरेटर: एकदम धीमी, गंभीर और सस्पेंस वाली गति
-                voice = "hi-IN-MadhurNeural"
-                rate = "-15%"
-                pitch = "-2Hz"
+        mixed_audio = voice_audio.overlay(bgm_audio)
+        mixed_audio.export(final_output, format="mp3")
 
-            temp_path = f"part_{idx}.mp3"
-            temp_files.append(temp_path)
-
-            tts = edge_tts.Communicate(dialog, voice=voice, pitch=pitch, rate=rate)
-            await tts.save(temp_path)
-
-            segment = AudioSegment.from_file(temp_path)
-            # हर डायलॉग के बाद 1.2 सेकंड का सन्नाटा ताकि सस्पेंस बने
-            combined_dialogs += segment + AudioSegment.silent(duration=1200)
-
-        await status.edit_text("डरावना बैकग्राउंड माहौल जोड़ा जा रहा है...")
-
-        dialog_duration = len(combined_dialogs)
-        
-        # 100% पक्का हॉरर ट्रैक जनरेट करना
-        horror_bgm = generate_horror_track(dialog_duration)
-
-        # दोनों को आपस में मिक्स करना
-        final_audio = combined_dialogs.overlay(horror_bgm)
-        
-        output_file = "final_suspense_horror.mp3"
-        temp_files.append(output_file)
-        final_audio.export(output_file, format="mp3", bitrate="192k")
-
-        with open(output_file, "rb") as audio:
-            await update.message.reply_audio(
-                audio=audio, 
-                title="Slow Suspense Horror Story", 
-                caption="धीमी सस्पेंस भरी आवाज़ और हॉरर बैकग्राउंड वाला ऑडियो तैयार है!"
-            )
-
-        await status.delete()
+        await msg.delete()
+        await update.message.reply_audio(audio=open(final_output, "rb"), caption="ये रही आपकी हॉरर कहानी!")
 
     except Exception as e:
-        await status.edit_text(f"त्रुटि: {e}")
-
+        await msg.edit_text(f"एरर आ गया: {e}")
     finally:
-        for f in temp_files:
-            if os.path.exists(f):
-                try:
-                    os.remove(f)
-                except Exception:
-                    pass
+        for file in [temp_voice, final_output]:
+            if os.path.exists(file):
+                os.remove(file)
 
-if __name__ == "__main__":
-    server_thread = threading.Thread(target=run_server, daemon=True)
-    server_thread.start()
-
+def main():
+    threading.Thread(target=run_server, daemon=True).start()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), generate_horror_audio))
-    print("हॉरर ऑडियो बॉट चालू है...")
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_story))
     app.run_polling()
+
+if __name__ == "__main__":
+    main()
